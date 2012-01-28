@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="Wheel">
+        <attr format="integer" name="ticks" />
+        <attr format="integer" name="numRotations" />
+    </declare-styleable>
+    
+    <declare-styleable name="WheelRadio">
+        <attr format="integer" name="smallTicks" />
+        <attr format="integer" name="bigTicks" />
+        <attr format="color|reference" name="valueIndicatorColor" />
+        <attr format="color|reference" name="bigIndicatorColor" />
+        <attr format="color|reference" name="smallIndicatorColor" />
+    </declare-styleable>    
+</resources>
