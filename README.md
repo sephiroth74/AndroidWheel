@@ -31,3 +31,7 @@ In your activity you can add a **OnScrollListener** listener to the wheel widget
 		} );
 		
 Where **float value** is a value between -1.0 and 1.0 of the current indicator position and **int roundValue** is a value between -(ticks*numRotations) and (ticks*numRotations)
+
+## Screen Shots ##
+
+![Wheel running on ICS](https://github.com/sephiroth74/AndroidWheel/raw/master/Screenshot_2012-01-28-13-33-04.png "Screenshot 1")
