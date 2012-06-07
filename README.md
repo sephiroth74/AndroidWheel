@@ -4,7 +4,7 @@ To include the wheel widget in the current layout, you should add in the layout 
 
             <it.sephiroth.android.wheel.view.Wheel
                 android:id="@+id/wheel"
-                xmlns:sephiroth="http://schemas.android.com/apk/res/it.sephiroth.android.wheel"
+                xmlns:sephiroth="http://schemas.android.com/apk/res-auto"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 sephiroth:numRotations="6"
