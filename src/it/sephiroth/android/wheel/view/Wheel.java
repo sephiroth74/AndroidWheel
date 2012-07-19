@@ -227,25 +227,44 @@ public class Wheel extends View implements OnGestureListener {
 		}
 
 		if ( mVibrator != null ) {
-			mVibrationHandler = new Handler() {
-
-				@Override
-				public void handleMessage( Message msg ) {
-					super.handleMessage( msg );
-
-					switch ( msg.what ) {
-						case MSG_VIBRATE:
-							try {
-								mVibrator.vibrate( 10 );
-							} catch ( SecurityException e ) {
-								// missing VIBRATE permission
-								e.printStackTrace();
-							}
-					}
-				}
-			};
+			setVibrationEnabled( true );
 		}
 		setBackgroundDrawable( new LinearGradientDrawable( Orientation.LEFT_RIGHT, mBgColors, mBgPositions ) );
+	}
+
+	/**
+	 * Enable/Disable the vibration feedback
+	 */
+	public void setVibrationEnabled( boolean value ) {
+		if ( !value ) {
+			mVibrationHandler = null;
+		} else {
+			if ( null == mVibrationHandler ) {
+				mVibrationHandler = new Handler() {
+
+					@Override
+					public void handleMessage( Message msg ) {
+						super.handleMessage( msg );
+
+						switch ( msg.what ) {
+							case MSG_VIBRATE:
+								try {
+									mVibrator.vibrate( 10 );
+								} catch ( SecurityException e ) {
+									// missing VIBRATE permission
+								}
+						}
+					}
+				};
+			}
+		}
+	}
+
+	/**
+	 * Get the current vibration status
+	 */
+	public boolean getVibrationEnabled() {
+		return mVibrationHandler != null;
 	}
 
 	/**
