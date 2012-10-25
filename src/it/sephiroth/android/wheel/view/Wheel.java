@@ -4,6 +4,9 @@ import it.sephiroth.android.wheel.R;
 import it.sephiroth.android.wheel.easing.Easing;
 import it.sephiroth.android.wheel.easing.Sine;
 import it.sephiroth.android.wheel.graphics.LinearGradientDrawable;
+import it.sephiroth.android.wheel.utils.ReflectionUtils;
+import it.sephiroth.android.wheel.utils.ReflectionUtils.ReflectionException;
+import it.sephiroth.android.wheel.view.IFlingRunnable.FlingRunnableView;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Bitmap;
@@ -28,15 +31,8 @@ import android.view.GestureDetector.OnGestureListener;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
-import android.view.animation.DecelerateInterpolator;
-import android.widget.OverScroller;
-import android.widget.Scroller;
 
-// TODO: Auto-generated Javadoc
-/**
- * The Class Wheel.
- */
-public class Wheel extends View implements OnGestureListener {
+public class Wheel extends View implements OnGestureListener, FlingRunnableView, VibrationWidget {
 
 	/** The Constant LOG_TAG. */
 	static final String LOG_TAG = "wheel";
@@ -88,8 +84,9 @@ public class Wheel extends View implements OnGestureListener {
 		 */
 		void onScrollFinished( Wheel view, float value, int roundValue );
 	}
-	
+
 	public interface OnLayoutListener {
+
 		void onLayout( View view );
 	}
 
@@ -115,25 +112,19 @@ public class Wheel extends View implements OnGestureListener {
 	boolean mToLeft;
 	int mTouchSlop;
 	float mIndicatorX = 0;
-	int mOriginalX = 0;
 	int mOriginalDeltaX = 0;
 	float mTickSpace = 30;
 	int mWheelSizeFactor = 2;
 	int mTicksCount = 18;
 	float mTicksSize = 7.0f;
 	Vibrator mVibrator;
-	Handler mVibrationHandler;
+	static Handler mVibrationHandler;
 	Easing mTicksEasing = new Sine();
-	Matrix mDrawMatrix = new Matrix();	
+	Matrix mDrawMatrix = new Matrix();
 	boolean mForceLayout;
 	private int[] mBgColors = { 0xffa1a1a1, 0xffa1a1a1, 0xffffffff, 0xffa1a1a1, 0xffa1a1a1 };
 	private float[] mBgPositions = { 0, 0.2f, 0.5f, 0.8f, 1f };
 
-	/**
-	 * When fling runnable runs, it resets this to false. Any method along the path until the end of its run() can set this to true
-	 * to abort any remaining fling. For example, if we've reached either the leftmost or rightmost item, we will set this to true.
-	 */
-	private boolean mShouldStopFling;
 
 	/**
 	 * Instantiates a new wheel.
@@ -181,10 +172,28 @@ public class Wheel extends View implements OnGestureListener {
 	public void setOnScrollListener( OnScrollListener listener ) {
 		mScrollListener = listener;
 	}
-	
-	public void setOnLayoutListener( OnLayoutListener listener ){
+
+	public void setOnLayoutListener( OnLayoutListener listener ) {
 		mLayoutListener = listener;
 	}
+	
+	/**
+	 * change the current wheel position and value
+	 * @param value - the new value. it should be between -1.0f and 1.0f
+	 * @param fireScrollEvent - if true this will call the scrollCompletion listener
+	 */
+	public void setValue( float value, boolean fireScrollEvent ) {
+		if( value >= -1 && value <= 1 ) {
+			int w = getRealWidth();
+			mFlingRunnable.stop( false );
+			mOriginalDeltaX = (int) ( value * ( w * mWheelSizeFactor ) );
+			invalidate();
+			
+			if( fireScrollEvent ) {
+				scrollCompleted();
+			}
+		}
+	}	
 
 	/**
 	 * Initializer.
@@ -198,10 +207,16 @@ public class Wheel extends View implements OnGestureListener {
 	 */
 	private void init( Context context, AttributeSet attrs, int defStyle ) {
 
-		if ( android.os.Build.VERSION.SDK_INT > 8 )
-			mFlingRunnable = new Fling9Runnable();
-		else
-			mFlingRunnable = new Fling8Runnable();
+		if ( android.os.Build.VERSION.SDK_INT > 8 ) {
+			try {
+				mFlingRunnable = (IFlingRunnable) ReflectionUtils.newInstance( "it.sephiroth.android.wheel.view.Fling9Runnable",
+						new Class<?>[] { FlingRunnableView.class, int.class }, this, mAnimationDuration );
+			} catch ( ReflectionException e ) {
+				mFlingRunnable = new Fling8Runnable( this, mAnimationDuration );
+			}
+		} else {
+			mFlingRunnable = new Fling8Runnable( this, mAnimationDuration );
+		}
 
 		TypedArray a = context.obtainStyledAttributes( attrs, R.styleable.Wheel, defStyle, 0 );
 
@@ -218,7 +233,7 @@ public class Wheel extends View implements OnGestureListener {
 		setFocusable( true );
 		setFocusableInTouchMode( true );
 
-		mTouchSlop = ViewConfiguration.getTouchSlop();
+		mTouchSlop = ViewConfiguration.get( context ).getScaledTouchSlop();
 
 		try {
 			mVibrator = (Vibrator) context.getSystemService( Context.VIBRATOR_SERVICE );
@@ -235,7 +250,8 @@ public class Wheel extends View implements OnGestureListener {
 	/**
 	 * Enable/Disable the vibration feedback
 	 */
-	public void setVibrationEnabled( boolean value ) {
+	@Override
+	public synchronized void setVibrationEnabled( boolean value ) {
 		if ( !value ) {
 			mVibrationHandler = null;
 		} else {
@@ -263,7 +279,8 @@ public class Wheel extends View implements OnGestureListener {
 	/**
 	 * Get the current vibration status
 	 */
-	public boolean getVibrationEnabled() {
+	@Override
+	public synchronized boolean getVibrationEnabled() {
 		return mVibrationHandler != null;
 	}
 
@@ -312,15 +329,20 @@ public class Wheel extends View implements OnGestureListener {
 		p.setDither( true );
 
 		p.setColor( 0xFF888888 );
-		RectF rect = new RectF( 0, 10, width, height - 25 );
+
+		float h = (float) height;
+		float y = ( h + 10.0f ) / 10.0f;
+		float y2 = y * 2.5f;
+
+		RectF rect = new RectF( 0, y, width, height - y2 );
 		c.drawRoundRect( rect, ellipse, ellipse, p );
 
 		p.setColor( 0xFFFFFFFF );
-		rect = new RectF( 0, 25, width, height - 10 );
+		rect = new RectF( 0, y2, width, height - y );
 		c.drawRoundRect( rect, ellipse, ellipse, p );
 
 		p.setColor( 0xFFCCCCCC );
-		rect = new RectF( 0, 12, width, height - 12 );
+		rect = new RectF( 0, y + 2, width, height - ( y + 2 ) );
 		c.drawRoundRect( rect, ellipse, ellipse, p );
 		return bm;
 	}
@@ -337,6 +359,9 @@ public class Wheel extends View implements OnGestureListener {
 	private Bitmap makeBitmapIndicator( int width, int height ) {
 
 		float ellipse = width / 2;
+		float h = (float) height;
+		float y = ( h + 10.0f ) / 10.0f;
+		float y2 = y * 2.5f;
 
 		Bitmap bm = Bitmap.createBitmap( width, height, Bitmap.Config.ARGB_8888 );
 		Canvas c = new Canvas( bm );
@@ -345,14 +370,14 @@ public class Wheel extends View implements OnGestureListener {
 		p.setDither( true );
 
 		p.setColor( 0xFF666666 );
-		RectF rect = new RectF( 0, 10, width, height - 25 );
+		RectF rect = new RectF( 0, y, width, height - y2 );
 		c.drawRoundRect( rect, ellipse, ellipse, p );
 
 		p.setColor( 0xFFFFFFFF );
-		rect = new RectF( 0, 25, width, height - 10 );
+		rect = new RectF( 0, y2, width, height - y );
 		c.drawRoundRect( rect, ellipse, ellipse, p );
 
-		rect = new RectF( 0, 12, width, height - 12 );
+		rect = new RectF( 0, y + 2, width, height - ( y + 2 ) );
 		int colors[] = { 0xFF0076E7, 0xFF00BBFF, 0xFF0076E7 };
 		float positions[] = { 0f, 0.5f, 1f };
 		LinearGradient gradient = new LinearGradient( 0, 0, width, 0, colors, positions, TileMode.REPEAT );
@@ -374,18 +399,10 @@ public class Wheel extends View implements OnGestureListener {
 			int total = mTicksCount;
 			float x2;
 			float scale, scale2;
-			
-			float indicatorx = ( mIndicatorX + mOriginalDeltaX );
-			final boolean indicator_visible = indicatorx > 0 && indicatorx < mWidth;
 
 			mPaint.setShader( null );
 
 			for ( int i = 0; i < total; i++ ) {
-				
-				if( indicator_visible && i == total/2 ){
-					continue;
-				}
-				
 				float x = ( mOriginalDeltaX + ( ( (float) i / total ) * w ) );
 
 				if ( x < 0 ) {
@@ -403,6 +420,7 @@ public class Wheel extends View implements OnGestureListener {
 				canvas.drawBitmap( mTickBitmap, mDrawMatrix, mPaint );
 			}
 
+			float indicatorx = ( mIndicatorX + mOriginalDeltaX );
 
 			if ( indicatorx < 0 ) {
 				indicatorx = ( mWidth * 2 ) - ( -indicatorx % ( mWidth * 2 ) );
@@ -426,6 +444,19 @@ public class Wheel extends View implements OnGestureListener {
 		}
 	}
 
+	/**
+	 * Change the background gradient colors. the size of the colors array must be the same as the size of the positions array.
+	 * 
+	 * @param colors
+	 * @param positions
+	 */
+	public void setBackgroundColors( int[] colors, float[] positions ) {
+		if ( colors != null && positions != null && colors.length == positions.length ) {
+			mBgColors = colors;
+			mBgPositions = positions;
+			setBackgroundDrawable( new LinearGradientDrawable( Orientation.LEFT_RIGHT, mBgColors, mBgPositions ) );
+		}
+	}
 
 	/**
 	 * Sets the wheel scale factor.
@@ -439,21 +470,7 @@ public class Wheel extends View implements OnGestureListener {
 		requestLayout();
 		postInvalidate();
 	}
-	
-	/**
-	 * Change the background gradient colors. the size of the colors array must be the same
-	 * as the size of the positions array.
-	 * 
-	 * @param colors
-	 * @param positions
-	 */
-	public void setBackgroundColors( int[] colors, float[] positions ){
-		if( colors != null && positions != null && colors.length == positions.length ){
-			mBgColors = colors;
-			mBgPositions = positions;
-			setBackgroundDrawable( new LinearGradientDrawable( Orientation.LEFT_RIGHT, mBgColors, mBgPositions ) );
-		}
-	}
+
 
 	/**
 	 * Gets the wheel scale factor.
@@ -489,7 +506,6 @@ public class Wheel extends View implements OnGestureListener {
 			mTicksSize = Math.min( Math.max( mTicksSize, 3.5f ), 6.0f );
 
 			mIndicatorX = (float) mWidth / 2.0f;
-			mOriginalX = (int) mIndicatorX;
 
 			mMaxX = mWidth * mWheelSizeFactor;
 
@@ -498,8 +514,8 @@ public class Wheel extends View implements OnGestureListener {
 			mShader3 = new BitmapShader( makeBitmap3( right - left, bottom - top ), Shader.TileMode.CLAMP, Shader.TileMode.REPEAT );
 
 			mMinX = -mMaxX;
-			
-			if( null != mLayoutListener ){
+
+			if ( null != mLayoutListener ) {
 				mLayoutListener.onLayout( this );
 			}
 		}
@@ -644,7 +660,8 @@ public class Wheel extends View implements OnGestureListener {
 	 * @param newX
 	 *           the new x
 	 */
-	void trackMotionScroll( int newX ) {
+	@Override
+	public void trackMotionScroll( int newX ) {
 		mOriginalDeltaX = newX;
 		scrollRunning();
 		invalidate();
@@ -675,7 +692,8 @@ public class Wheel extends View implements OnGestureListener {
 	/**
 	 * Scroll into slots.
 	 */
-	private void scrollIntoSlots() {
+	@Override
+	public void scrollIntoSlots() {
 
 		if ( !mFlingRunnable.isFinished() ) {
 			return;
@@ -779,13 +797,15 @@ public class Wheel extends View implements OnGestureListener {
 	 * Scroll running.
 	 */
 	void scrollRunning() {
-		if ( mInLayout ) {
-			if ( mScrollSelectionNotifier == null ) {
-				mScrollSelectionNotifier = new ScrollSelectionNotifier();
+		if ( mScrollListener != null ) {
+			if ( mInLayout ) {
+				if ( mScrollSelectionNotifier == null ) {
+					mScrollSelectionNotifier = new ScrollSelectionNotifier();
+				}
+				post( mScrollSelectionNotifier );
+			} else {
+				fireOnScrollRunning();
 			}
-			post( mScrollSelectionNotifier );
-		} else {
-			fireOnScrollRunning();
 		}
 	}
 
@@ -874,301 +894,13 @@ public class Wheel extends View implements OnGestureListener {
 		mLastMotionValue = value;
 	}
 
-	/**
-	 * The Class IFlingRunnable.
-	 */
-	abstract class IFlingRunnable implements Runnable {
-
-		/** The m last fling x. */
-		protected int mLastFlingX;
-
-		/**
-		 * Start common.
-		 */
-		protected void startCommon() {
-			removeCallbacks( this );
-		}
-
-		/**
-		 * Stop.
-		 * 
-		 * @param scrollIntoSlots
-		 *           the scroll into slots
-		 */
-		public void stop( boolean scrollIntoSlots ) {
-			removeCallbacks( this );
-			endFling( scrollIntoSlots );
-		}
-
-		/**
-		 * Start using distance.
-		 * 
-		 * @param initialX
-		 *           the initial x
-		 * @param distance
-		 *           the distance
-		 */
-		public void startUsingDistance( int initialX, int distance ) {
-			if ( distance == 0 ) return;
-			startCommon();
-			mLastFlingX = initialX;
-			_startUsingDistance( mLastFlingX, distance );
-			post( this );
-		}
-
-		/**
-		 * Start using velocity.
-		 * 
-		 * @param initialX
-		 *           the initial x
-		 * @param initialVelocity
-		 *           the initial velocity
-		 */
-		public void startUsingVelocity( int initialX, int initialVelocity ) {
-			if ( initialVelocity == 0 ) return;
-			startCommon();
-			mLastFlingX = initialX;
-			_startUsingVelocity( mLastFlingX, initialVelocity );
-			post( this );
-		}
-
-		/**
-		 * End fling.
-		 * 
-		 * @param scrollIntoSlots
-		 *           the scroll into slots
-		 */
-		protected void endFling( boolean scrollIntoSlots ) {
-			forceFinished( true );
-
-			if ( scrollIntoSlots ) {
-				scrollIntoSlots();
-			}
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see java.lang.Runnable#run()
-		 */
-		@Override
-		public void run() {
-			mShouldStopFling = false;
-
-			final boolean more = computeScrollOffset();
-			int x = getCurrX();
-
-			trackMotionScroll( x );
-
-			if ( more && !mShouldStopFling ) {
-				mLastFlingX = x;
-				post( this );
-			} else {
-				endFling( true );
-			}
-		}
-
-		/**
-		 * Compute scroll offset.
-		 * 
-		 * @return true, if successful
-		 */
-		protected abstract boolean computeScrollOffset();
-
-		/**
-		 * Gets the curr x.
-		 * 
-		 * @return the curr x
-		 */
-		protected abstract int getCurrX();
-
-		/**
-		 * Force finished.
-		 * 
-		 * @param finished
-		 *           the finished
-		 */
-		protected abstract void forceFinished( boolean finished );
-
-		/**
-		 * _start using velocity.
-		 * 
-		 * @param initialX
-		 *           the initial x
-		 * @param velocity
-		 *           the velocity
-		 */
-		protected abstract void _startUsingVelocity( int initialX, int velocity ); // private
-
-		/**
-		 * _start using distance.
-		 * 
-		 * @param initialX
-		 *           the initial x
-		 * @param distance
-		 *           the distance
-		 */
-		protected abstract void _startUsingDistance( int initialX, int distance ); // private
-
-		/**
-		 * Checks if is finished.
-		 * 
-		 * @return true, if is finished
-		 */
-		public abstract boolean isFinished();
+	@Override
+	public int getMinX() {
+		return mMinX;
 	}
 
-	/**
-	 * The Class Fling8Runnable.
-	 */
-	private class Fling8Runnable extends IFlingRunnable {
-
-		/** The m scroller. */
-		private Scroller mScroller;
-
-		/**
-		 * Instantiates a new fling8 runnable.
-		 */
-		public Fling8Runnable() {
-			mScroller = new Scroller( getContext(), new DecelerateInterpolator() );
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#isFinished()
-		 */
-		@Override
-		public boolean isFinished() {
-			return mScroller.isFinished();
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#_startUsingVelocity(int, int)
-		 */
-		@Override
-		protected void _startUsingVelocity( int initialX, int velocity ) {
-			mScroller.fling( initialX, 0, velocity, 0, mMinX, mMaxX, 0, Integer.MAX_VALUE );
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#_startUsingDistance(int, int)
-		 */
-		@Override
-		protected void _startUsingDistance( int initialX, int distance ) {
-			mScroller.startScroll( initialX, 0, distance, 0, mAnimationDuration );
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#forceFinished(boolean)
-		 */
-		@Override
-		protected void forceFinished( boolean finished ) {
-			mScroller.forceFinished( finished );
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#computeScrollOffset()
-		 */
-		@Override
-		protected boolean computeScrollOffset() {
-			return mScroller.computeScrollOffset();
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#getCurrX()
-		 */
-		@Override
-		protected int getCurrX() {
-			return mScroller.getCurrX();
-		}
+	@Override
+	public int getMaxX() {
+		return mMaxX;
 	}
-
-	/**
-	 * The Class Fling9Runnable.
-	 */
-	private class Fling9Runnable extends IFlingRunnable {
-
-		/** The m scroller. */
-		private OverScroller mScroller;
-
-		/**
-		 * Instantiates a new fling9 runnable.
-		 */
-		public Fling9Runnable() {
-			mScroller = new OverScroller( getContext(), new DecelerateInterpolator() );
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#isFinished()
-		 */
-		@Override
-		public boolean isFinished() {
-			return mScroller.isFinished();
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#_startUsingVelocity(int, int)
-		 */
-		@Override
-		protected void _startUsingVelocity( int initialX, int velocity ) {
-			mScroller.fling( initialX, 0, velocity, 0, mMinX, mMaxX, 0, Integer.MAX_VALUE, 10, 0 );
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#_startUsingDistance(int, int)
-		 */
-		@Override
-		protected void _startUsingDistance( int initialX, int distance ) {
-			mScroller.startScroll( initialX, 0, distance, 0, mAnimationDuration );
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#computeScrollOffset()
-		 */
-		@Override
-		protected boolean computeScrollOffset() {
-			return mScroller.computeScrollOffset();
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#getCurrX()
-		 */
-		@Override
-		protected int getCurrX() {
-			return mScroller.getCurrX();
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * 
-		 * @see com.aviary.android.feather.widget.Wheel.IFlingRunnable#forceFinished(boolean)
-		 */
-		@Override
-		protected void forceFinished( boolean finished ) {
-			mScroller.forceFinished( finished );
-		}
-
-	}
-
 }
