@@ -32,6 +32,16 @@ In your activity you can add a **OnScrollListener** listener to the wheel widget
 		
 Where **float value** is a value between -1.0 and 1.0 of the current indicator position and **int roundValue** is a value between -(ticks*numRotations) and (ticks*numRotations)
 
+
+###Change the Wheel value
+The wheel position and value chan be changed programmatically at runtime using the Wheel's method **setValue**:
+
+	public void setValue( float value, boolean fireScrollEvent );
+	
+- value is the new wheel value, a float between -1.0f and 1.0f, where 0.0f it's the center of the wheel.
+- fireScrollEvent: if true, once this method is called the onScrollFinished method will be called.
+
+
 ## Screen Shots ##
 
 ![Wheel running on ICS](https://github.com/sephiroth74/AndroidWheel/raw/master/Screenshot_2012-01-28-13-33-04.png "Screenshot 1")
